@@ -707,6 +707,12 @@ class VeritransPay extends PaymentModule
 						'name' => 'VT_KURS',
 						'desc' => 'Veritrans will use this rate to convert prices to IDR when there are no default conversion system.'
 						),
+					array(
+						'type' => 'text',
+						'label' => 'Convenience Fee',
+						'name' => 'VT_CONVENIENCE_FEE',
+						'desc' => 'Payment Charge Settings in %'
+						),
 					),
 				'submit' => array(
 					'title' => $this->l('Save'),
@@ -1352,6 +1358,7 @@ class VeritransPay extends PaymentModule
 			$discount *= -1;
 		}
 		$commodities = array();
+		$paymentfee = $convenience_fee * ($cart->getOrderTotal(true, Cart::ONLY_PRODUCTS_WITHOUT_SHIPPING));
 		$price = 0;
 		foreach ($products as $aProduct) {
 			//error_log('detail product');
@@ -1389,7 +1396,7 @@ class VeritransPay extends PaymentModule
 				"name" => 'Convenience Fee',
 				);
 		}
-		
+
 		//error_log(print_r($commodities,true));
 		return $commodities;
 	}
