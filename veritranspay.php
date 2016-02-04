@@ -1,17 +1,13 @@
 <?php
-
 if (!defined('_PS_VERSION_'))
 	exit;
-
 require_once('library/veritrans/Veritrans.php');
 require_once 'library/veritrans/Veritrans/Notification.php';
 require_once 'library/veritrans/Veritrans/Transaction.php';
-
 class VeritransPay extends PaymentModule
 {
 	private $_html = '';
 	private $_postErrors = array();
-
 	public $veritrans_merchant_id;
 	public $veritrans_merchant_hash;
 	public $veritrans_kurs;
@@ -26,9 +22,7 @@ class VeritransPay extends PaymentModule
 	public $veritrans_payment_failure_status_mapping;
 	public $veritrans_payment_challenge_status_mapping;
 	public $veritrans_environment;
-
 	public $config_keys;
-
 	public function __construct()
 	{
 		$this->name = 'veritranspay';
@@ -39,8 +33,7 @@ class VeritransPay extends PaymentModule
 		
 		$this->currencies = true;
 		$this->currencies_mode = 'checkbox';
-		$this->veritrans_convenience_fee = 10;
-
+		$this->veritrans_convenience_fee = 0;
 		// key length must be between 0-32 chars to maintain compatibility with <= 1.5
 		$this->config_keys = array(			
 			'VT_CLIENT_KEY',
@@ -65,6 +58,7 @@ class VeritransPay extends PaymentModule
 			'ENABLED_BBM_MONEY',
 			'ENABLED_INDOMARET',
 			'ENABLED_INDOSAT_DOMPETKU',
+			'ENABLED_MANDIRI_ECASH',
 			'VT_SANITIZED',
 			'VT_ENABLE_INSTALLMENT',
 			'ENABLED_BNI_INSTALLMENT',
@@ -72,15 +66,12 @@ class VeritransPay extends PaymentModule
 			'VT_INSTALLMENTS_BNI',
 			'VT_INSTALLMENTS_MANDIRI'
 			);
-
 		foreach (array('BNI', 'MANDIRI') as $bank) {
 			foreach (array(3, 6, 12) as $months) {
 				array_push($this->config_keys, 'VT_INSTALLMENTS_' . $bank . '_' . $months);
 			}
 		}
-
 		$config = Configuration::getMultiple($this->config_keys);
-
 		foreach ($this->config_keys as $key) {
 			if (isset($config[$key]))
 				$this->{strtolower($key)} = $config[$key];
@@ -96,10 +87,9 @@ class VeritransPay extends PaymentModule
 			$this->veritrans_convenience_fee = $config['VT_CONVENIENCE_FEE'];
 		else
 			Configuration::set('VT_CONVENIENCE_FEE', 0);
-
+		
 		Configuration::set('VT_API_VERSION', 2);
 		Configuration::set('VT_PAYMENT_TYPE','vtweb');
-
 		if (!isset($config['VT_SANITIZED']))
 			Configuration::set('VT_SANITIZED', 0);	
 		if (!isset($config['ENABLED_CREDIT_CARD']))
@@ -124,8 +114,9 @@ class VeritransPay extends PaymentModule
 			Configuration::set('ENABLED_INDOMARET', 0);
 		if (!isset($config['ENABLED_INDOSAT_DOMPETKU']))
 			Configuration::set('ENABLED_INDOSAT_DOMPETKU', 0);
+		if (!isset($config['ENABLED_MANDIRI_ECASH']))
+			Configuration::set('ENABLED_MANDIRI_ECASH', 0);
 		parent::__construct();
-
 		$this->displayName = $this->l('Veritrans Pay');
 		$this->description = $this->l('Accept payments for your products via Veritrans.');
 		$this->confirmUninstall = $this->l('Are you sure about uninstalling Veritrans pay?');
@@ -133,16 +124,13 @@ class VeritransPay extends PaymentModule
 		
 		if (!count(Currency::checkPaymentCurrencies($this->id)))
 			$this->warning = $this->l('No currency has been set for this module.');
-
 		// Retrocompatibility
 		$this->initContext();
 	}
-
 	public function isOldPrestashop()
 	{
 		return version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1;
 	}
-
 	public function install()
 	{
 		// create a new order state for Veritrans, since Prestashop won't assign order ID unless it is validated,
@@ -160,10 +148,8 @@ class VeritransPay extends PaymentModule
 		
 		$order_state->unremovable = false;
 		$order_state->add();
-
 		Configuration::updateValue('VT_ORDER_STATE_ID', $order_state->id);
 		Configuration::updateValue('VT_API_VERSION', 2);
-
 		if (!parent::install() || 
 			!$this->registerHook('payment') ||
 			!$this->registerHook('header') ||
@@ -174,14 +160,11 @@ class VeritransPay extends PaymentModule
 		include_once(_PS_MODULE_DIR_ . '/' . $this->name . '/vtpay_install.php');
 		$vtpay_install = new VeritransPayInstall();
 		$vtpay_install->createTable();
-
 		return true;
 	}
-
 	public function uninstall()
 	{
 		$status = true;
-
 		$veritrans_payment_waiting_order_state_id = Configuration::get('VT_ORDER_STATE_ID');
 		if ($veritrans_payment_waiting_order_state_id)
 		{
@@ -194,7 +177,6 @@ class VeritransPay extends PaymentModule
 			$status = false;
 		return $status;
 	}
-
 	private function _postValidation()
 	{
 		if (Tools::isSubmit('btnSubmit'))
@@ -206,7 +188,6 @@ class VeritransPay extends PaymentModule
 				if (!Tools::getValue('VT_SERVER_KEY'))
 					$this->_postErrors[] = $this->l('Server Key is required.');
 			} 
-
 			// validate conversion rate existence
 			if (!Currency::exists('IDR', null) && !Tools::getValue('VT_KURS'))
 			{
@@ -214,7 +195,6 @@ class VeritransPay extends PaymentModule
 			}
 		}
 	}
-
 	private function _postProcess()
 	{
 		if (Tools::isSubmit('btnSubmit'))
@@ -225,7 +205,6 @@ class VeritransPay extends PaymentModule
 		}
 		$this->_html .= '<div class="alert alert-success conf confirm"> '.$this->l('Settings updated').'</div>';
 	}
-
 	private function _displayVeritransPay()
 	{
 		if (version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1)
@@ -237,13 +216,11 @@ class VeritransPay extends PaymentModule
 			$this->_html .= $this->display(__FILE__, 'infos.tpl');
 		}
 	}
-
 	private function _displayVeritransPayOld()
 	{
-		$this->_html .= '<img src="../modules/veritranspay/Veritransx.png" style="float:left; margin-right:15px;"><b>'.$this->l('This module allows payment via veritrans.').'</b><br/><br/>
+		$this->_html .= '<img src="../modules/veritranspay/Veritrans.png" style="float:left; margin-right:15px;"><b>'.$this->l('This module allows payment via veritrans.').'</b><br/><br/>
 		'.$this->l('Payment via veritrans.').'<br /><br /><br />';
 	}
-
 	private function _displayForm()
 	{
 		if (version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1) {
@@ -255,7 +232,6 @@ class VeritransPay extends PaymentModule
 		}
 		
 	}
-
 	public function getConfigFieldsValues()
 	{
 		$result = array();
@@ -266,10 +242,8 @@ class VeritransPay extends PaymentModule
 		//error_log(print_r($result,true));
 		return $result;
 	}
-
 	private function _displayFormNew()
 	{
-
 		$order_states = array();
 		foreach (OrderState::getOrderStates($this->context->language->id) as $state) {
 			array_push($order_states, array(
@@ -289,7 +263,6 @@ class VeritransPay extends PaymentModule
 					));
 			}
 		}
-
 		$environments = array(
 			array(
 				'id_option' => 'development',
@@ -300,7 +273,6 @@ class VeritransPay extends PaymentModule
 				'name' => 'Production'
 				)
 			);
-
 		$installment_type = array(
 			array(
 				'id_option' => 'off',
@@ -315,11 +287,10 @@ class VeritransPay extends PaymentModule
 				'name' => 'Certain Product'
 				)			
 			);
-
 		$fields_form = array(
 			'form' => array(
 				'legend' => array(
-					'title' => 'Basic Informations',
+					'title' => 'Basic Information',
 					'icon' => 'icon-cogs'
 					),
 				'input' => array(
@@ -583,7 +554,7 @@ class VeritransPay extends PaymentModule
 						),
 					array(
 						'type' => (version_compare(Configuration::get('PS_VERSION_DB'), '1.6') == -1)?'radio':'switch',
-						'label' => 'INDOSAT DOMPETKU',
+						'label' => 'Indosat Dompetku',
 						'name' => 'ENABLED_INDOSAT_DOMPETKU',						
 						'is_bool' => true,
 						'values' => array(
@@ -594,6 +565,25 @@ class VeritransPay extends PaymentModule
 								),
 							array(
 								'id' => 'indosat_dompetku_no',
+								'value' => 0,
+								'label' => 'No'
+								)
+							),
+						//'class' => ''
+						),
+					array(
+						'type' => (version_compare(Configuration::get('PS_VERSION_DB'), '1.6') == -1)?'radio':'switch',
+						'label' => 'Mandiri Ecash',
+						'name' => 'ENABLED_MANDIRI_ECASH',						
+						'is_bool' => true,
+						'values' => array(
+							array(
+								'id' => 'mandiri_ecash_yes',
+								'value' => 1,
+								'label' => 'Yes'
+								),
+							array(
+								'id' => 'mandiri_ecash_no',
 								'value' => 0,
 								'label' => 'No'
 								)
@@ -716,12 +706,6 @@ class VeritransPay extends PaymentModule
 						'label' => 'IDR Conversion Rate',
 						'name' => 'VT_KURS',
 						'desc' => 'Veritrans will use this rate to convert prices to IDR when there are no default conversion system.'
-						),
-					array(
-						'type' => 'text',
-						'label' => 'Convenience Fee',
-						'name' => 'VT_CONVENIENCE_FEE',
-						'desc' => 'Convenience Fee (in %).'
 						),
 					),
 				'submit' => array(
@@ -846,7 +830,6 @@ class VeritransPay extends PaymentModule
 		// 			)
 		// 		)
 		// 	);
-
 		$helper = new HelperForm();
 		$helper->show_toolbar = false;
 		$helper->table =  $this->table;
@@ -864,13 +847,9 @@ class VeritransPay extends PaymentModule
 			'languages' => $this->context->controller->getLanguages(),
 			'id_language' => $this->context->language->id
 		);
-
-
-
 		$this->_html .= $helper->generateForm(array($fields_form));
 		//$this->_html .= $helper->generateForm(array($fields_payment_form));
 	}
-
 	private function _displayFormOld()
 	{
 		$order_states = array();
@@ -881,7 +860,6 @@ class VeritransPay extends PaymentModule
 				)
 			);
 		}
-
 		$this->context->smarty->assign(array(
 			'form_url' => Tools::htmlentitiesUTF8($_SERVER['REQUEST_URI']),
 			'api_version' => htmlentities(Configuration::get('VT_API_VERSION'), ENT_COMPAT, 'UTF-8'),
@@ -899,6 +877,7 @@ class VeritransPay extends PaymentModule
 			'enabled_permatava' => htmlentities(Configuration::get('ENABLED_PERMATAVA'), ENT_COMPAT, 'UTF-8'),
 			'enabled_indomaret' => htmlentities(Configuration::get('ENABLED_INDOMARET'), ENT_COMPAT, 'UTF-8'),
 			'enabled_indosat_dompetku' => htmlentities(Configuration::get('ENABLED_INDOSAT_DOMPETKU'), ENT_COMPAT, 'UTF-8'),
+			'enabled_mandiri_ecash' => htmlentities(Configuration::get('ENABLED_MANDIRI_ECASH'), ENT_COMPAT, 'UTF-8'),
 			'statuses' => $order_states,
 			'payment_success_status_map' => htmlentities(Configuration::get('VT_PAYMENT_SUCCESS_STATUS_MAP'), ENT_COMPAT, 'UTF-8'),
 			'payment_challenge_status_map' => htmlentities(Configuration::get('VT_PAYMENT_CHALLENGE_STATUS_MAP'), ENT_COMPAT, 'UTF-8'),
@@ -913,11 +892,9 @@ class VeritransPay extends PaymentModule
 		$output = $this->context->smarty->fetch(__DIR__ . '/views/templates/hook/admin_retro.tpl');
 		$this->_html .= $output;
 	}
-
 	public function getContent()
 	{
 		// $this->_html = '<h2>'.$this->displayName.'</h2>';
-
 		if (Tools::isSubmit('btnSubmit'))
 		{
 			$this->_postValidation();
@@ -929,46 +906,36 @@ class VeritransPay extends PaymentModule
 		}
 		else
 			$this->_html .= '<br />';
-
 		$this->_displayVeritransPay();
 		$this->_displayForm();
-
 		return $this->_html;
 	}
-
 	public function hookDisplayHeader($params)
 	{
 		
 	}
-
 	// working in 1.5 and 1.6
 	public function hookDisplayBackOfficeHeader($params)
 	{
 		$this->context->controller->addJquery();
 		$this->context->controller->addJS($this->_path . 'js/veritrans_admin.js', 'all');
 	}
-
 	public function hookPayment($params)
 	{
 		return $this->hookDisplayPayment($params);				
 	}
-
 	public function hookDisplayPayment($params)
 	{
 		if (!$this->active)
 			return;
-
 		if (!$this->checkCurrency($params['cart']))
 			return;
-
 		$cart = $this->context->cart;
-
 		$this->context->smarty->assign(array(
 			'cart' => $cart,
 			'this_path' => $this->_path,
 			'this_path_ssl' => Tools::getShopDomainSsl(true, true).__PS_BASE_URI__.'modules/'.$this->name.'/'
 		));
-
 		// 1.4 compatibility
 		if (version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1) {
 			return $this->display(__FILE__, 'views/templates/hook/payment.tpl');
@@ -977,27 +944,21 @@ class VeritransPay extends PaymentModule
 			return $this->display(__FILE__, 'payment.tpl');	
 		}
 	}
-
 	public function hookOrderConfirmation($params)
 	{
 		if (!$this->active)
 			return;
-
 		if (!$this->checkCurrency($params['cart']))
 			return;
-
 		$order = new Order(Tools::getValue('id_order'));
 		$history = $order->getHistory($this->context->cookie->id_lang);	
-
 		$history = $history[0];
-
 		$this->context->smarty->assign(array(
 			'transaction_status' => $history['id_order_state'],
 			'cart' => $this->context->cart,
 			'this_path' => $this->_path,
 			'this_path_ssl' => Tools::getShopDomainSsl(true, true).__PS_BASE_URI__.'modules/'.$this->name.'/'
 		));
-
 		if (version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1) {
 			return $this->display(__FILE__, 'views/templates/hook/order_confirmation.tpl');
 		} else
@@ -1010,14 +971,12 @@ class VeritransPay extends PaymentModule
 	{
 		$currency_order = new Currency($cart->id_currency);
 		$currencies_module = $this->getCurrency($cart->id_currency);
-
 		if (is_array($currencies_module))
 			foreach ($currencies_module as $currency_module)
 				if ($currency_order->id == $currency_module['id_currency'])
 					return true;
 		return false;
 	}
-
 	// Retrocompatibility 1.4/1.5
 	private function initContext()
 	{
@@ -1041,7 +1000,6 @@ class VeritransPay extends PaymentModule
 	    }
 	  }
 	}
-
 	// Retrocompatibility 1.4
 	public function execPayment($cart)
 	{
@@ -1049,11 +1007,8 @@ class VeritransPay extends PaymentModule
 			return ;
 		if (!$this->checkCurrency($cart))
 			Tools::redirectLink(__PS_BASE_URI__.'order.php');
-
 		$link = new Link();
-
 		global $cookie, $smarty;
-
 		$smarty->assign(array(
 			'payment_type' => Configuration::get('VT_PAYMENT_TYPE'),
 			'api_version' => Configuration::get('VT_API_VERSION'),
@@ -1066,7 +1021,6 @@ class VeritransPay extends PaymentModule
 			'this_path' => $this->_path,
 			'this_path_ssl' => Tools::getShopDomainSsl(true, true).__PS_BASE_URI__.((int)Configuration::get('PS_REWRITING_SETTINGS') && count(Language::getLanguages()) > 1 && isset($smarty->ps_language) && !empty($smarty->ps_language) ? $smarty->ps_language->iso_code.'/' : '').'modules/'.$this->name.'/'
 		));
-
 		return $this->display(__FILE__, 'views/templates/front/payment_execution.tpl');
 	}
 //
@@ -1088,7 +1042,6 @@ class VeritransPay extends PaymentModule
 		//return $ans;
 		return $term2;
 	}
-
 	public function isInstallmentCart($products){		
 		foreach($products as $prod){
 			$str_attr = $prod['attributes_small'];
@@ -1098,15 +1051,12 @@ class VeritransPay extends PaymentModule
 		}		
 		return false;
 	}
-
 	// Retrocompatibility 1.4
 	public function execValidation($cart)
 	{
 		global $cookie;
-
 		if ($cart->id_customer == 0 || $cart->id_address_delivery == 0 || $cart->id_address_invoice == 0 || !$this->active)
 			Tools::redirect('index.php?controller=order&step=1');
-
 		// Check that this payment option is still available in case the customer changed his address just before the end of the checkout process
 		$authorized = false;
 		foreach (Module::getPaymentModules() as $module)
@@ -1117,14 +1067,11 @@ class VeritransPay extends PaymentModule
 			}
 		if (!$authorized)
 			die($this->module->l('This payment method is not available.', 'validation'));
-
 		$customer = new Customer($cart->id_customer);
 		if (!Validate::isLoadedObject($customer))
 			Tools::redirect('index.php?controller=order&step=1');
-
 		$usd = Configuration::get('VT_KURS');
 		$cf = Configuration::get('VT_CONVENIENCE_FEE') * 0.01;
-
 		$list_enable_payments = array();
 		
 		if (Configuration::get('ENABLED_CREDIT_CARD')){
@@ -1160,15 +1107,15 @@ class VeritransPay extends PaymentModule
 		if (Configuration::get('ENABLED_INDOSAT_DOMPETKU')){
 			$list_enable_payments[] = "indosat_dompetku";
 		}
+		if (Configuration::get('ENABLED_MANDIRI_ECASH')){
+			$list_enable_payments[] = "mandiri_ecash";
+		}
 		//error_log(print_r($list_enable_payments,TRUE));	
-
 		$veritrans = new Veritrans_Config();
 		//SETUP
 		Veritrans_Config::$serverKey = Configuration::get('VT_SERVER_KEY');
 		Veritrans_Config::$isProduction = Configuration::get('VT_ENVIRONMENT') == 'production' ? true : false;
-
 		$url = Veritrans_Config::getBaseUrl(); 
-
 		if (version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1)
 		{
 			$shipping_cost = $cart->getOrderShippingCost();
@@ -1176,7 +1123,6 @@ class VeritransPay extends PaymentModule
 		{
 			$shipping_cost = $cart->getTotalShippingCost();
 		}
-
 		$currency = new Currency($cookie->id_currency);
 		$total = $cart->getOrderTotal(true, Cart::BOTH);
 		
@@ -1189,12 +1135,10 @@ class VeritransPay extends PaymentModule
 		
     	if (Configuration::get('VT_3D_SECURE') == 'on' || Configuration::get('VT_3D_SECURE') == 1)
 			Veritrans_Config::$is3ds = true;		
-
 		if (Configuration::get('VT_SANITIZED') == 'on' || Configuration::get('VT_SANITIZED') == 1)
 			Veritrans_Config::$isSanitized = true;
 		
 		//error_log('sanitized '.Configuration::get('VT_SANITIZED'));
-
 		// Billing Address
     	$params_billing_address = array(
     			'first_name' => $billing_address->firstname, 
@@ -1205,7 +1149,6 @@ class VeritransPay extends PaymentModule
 				'phone' => $this->determineValidPhone($billing_address->phone, $billing_address->phone_mobile), 
 				'country_code' => 'IDN'
     		);
-
 		if($cart->isVirtualCart()) {
 			
 		} else {
@@ -1234,7 +1177,6 @@ class VeritransPay extends PaymentModule
 			'billing_address' => $params_billing_address, 
 			'shipping_address' => $params_shipping_address
 			);
-
 		$items = $this->addCommodities($cart, $shipping_cost, $usd, $cf);				
 		
 		// convert the currency
@@ -1260,9 +1202,13 @@ class VeritransPay extends PaymentModule
 			foreach ($items as &$item) {						
 				$item['price'] = intval(round(call_user_func($conversion_func, $item['price'])));				
 			}
-		}		
+		}else if($cart_currency->iso_code == 'IDR')
+		{
+			foreach ($items as &$item) {						
+				$item['price'] = intval(round($item['price']));				
+			}
+		}
 				
-
 		$this->validateOrder($cart->id, Configuration::get('VT_ORDER_STATE_ID'), $cart->getOrderTotal(true, Cart::BOTH), $this->displayName, NULL, $mailVars, (int)$currency->id, false, $customer->secure_key);				
 		
 		$gross_amount = 0;
@@ -1275,7 +1221,6 @@ class VeritransPay extends PaymentModule
 		$isMandiriInstallment = Configuration::get('ENABLED_MANDIRI_INSTALLMENT') == 1;
 		$warning_redirect = false;
 		$fullPayment = true;
-
 		$installment_type_val = Configuration::get('VT_ENABLE_INSTALLMENT');
 		$param_required;
 		switch ($installment_type_val) {
@@ -1291,13 +1236,11 @@ class VeritransPay extends PaymentModule
 				}					
 							
 				if ($isMandiriInstallment){
-
 					$mandiri_term =	$this->getTermInstallment('MANDIRI');
 					
 					$a = Configuration::get('VT_INSTALLMENTS_MANDIRI');
 					$term = explode(',',$a);
 					$mandiri_term = $term;
-
 					//error_log($mandiri_term,true);
 					//error_log(print_r($mandiri_term,true));
 				}				
@@ -1306,7 +1249,6 @@ class VeritransPay extends PaymentModule
 				if ($isBniInstallment){
 					$param_installment['bni'] = $bni_term;
 				}
-
 				if ($isMandiriInstallment){
 					$param_installment['mandiri'] = $mandiri_term;
 				}
@@ -1340,7 +1282,6 @@ class VeritransPay extends PaymentModule
 				break;
 		}		
 	
-
 	//error_log($param_installment,true);
 		// $param_payment_option = array(
 		// 	'installment' => array(
@@ -1348,7 +1289,6 @@ class VeritransPay extends PaymentModule
 		// 						'installment_terms' => $param_installment 
 		// 					)
 		// 	);
-
 		$params_all = array(
 			'payment_type' => Configuration::get('VT_PAYMENT_TYPE'),
 			'vtweb' => array (
@@ -1366,15 +1306,11 @@ class VeritransPay extends PaymentModule
 			$warning_redirect = true;
 			$keys['message'] = 2;
 		}
-
 		if( !$warning_redirect && 
 			($isBniInstallment || $isMandiriInstallment) && 
 			(!$fullPayment)  ){
-
 			$params_all['vtweb']['payment_options'] = $param_payment_option;		
 		}
-		
-
 		if (Configuration::get('VT_API_VERSION') == 2 && Configuration::get('VT_PAYMENT_TYPE') != 'vtdirect') //transaksi https://github.com/veritrans/veritrans-php/blob/vtweb-2/examples/v2/vt_web/checkout_process.php line 77
 		{						
 			try {
@@ -1403,26 +1339,20 @@ class VeritransPay extends PaymentModule
 			exit;
 		}
 	}
-
 	public function setMedia()
 	{
 		Tools::addJs('function onloadEvent() { document.form_auto_post.submit(); }');
 	}
-
 	public function addCommodities($cart, $shipping_cost, $usd, $convenience_fee)
 	{
 		
 		$products = $cart->getProducts();
 		$discount = -1 * $cart->getOrderTotal(true, Cart::ONLY_DISCOUNTS);
-
 		if (version_compare(Configuration::get('PS_VERSION_DB'), '1.5') == -1){ // for 1.4 version, voucher is negative
 			$discount *= -1;
 		}
-
 		$commodities = array();
-		$paymentfee = $convenience_fee * ($cart->getOrderTotal(true, Cart::ONLY_PRODUCTS_WITHOUT_SHIPPING));
 		$price = 0;
-
 		foreach ($products as $aProduct) {
 			//error_log('detail product');
 			//error_log(print_r($aProduct,true));
@@ -1433,7 +1363,6 @@ class VeritransPay extends PaymentModule
 				"name" => $aProduct['name']				
 			);
 		}
-
 		if($shipping_cost != 0){
 			$commodities[] = array(
 				"id" => 'SHIPPING_FEE',
@@ -1460,10 +1389,10 @@ class VeritransPay extends PaymentModule
 				"name" => 'Convenience Fee',
 				);
 		}
+		
 		//error_log(print_r($commodities,true));
 		return $commodities;
 	}
-
 	function insertTransaction($customer_id, $id_cart, $id_currency, $request_id, $token_merchant)
 	{
 		$sql = 'INSERT INTO `'._DB_PREFIX_.'vt_transaction`
@@ -1475,7 +1404,6 @@ class VeritransPay extends PaymentModule
 						\''.$token_merchant.'\')';
 		Db::getInstance()->Execute($sql);
 	}
-
 	function getTransaction($request_id)
 	{
 		$sql = 'SELECT *
@@ -1484,7 +1412,6 @@ class VeritransPay extends PaymentModule
 		$result = Db::getInstance()->getRow($sql);
 		return $result; 
 	}
-
 	// determine the phone number to make Veritrans happy
 	function determineValidPhone($home_phone = '', $mobile_phone = '')
 	{
@@ -1502,7 +1429,6 @@ class VeritransPay extends PaymentModule
 			return '081111111111';
 		}
 	}
-
 	
 	public function execNotification()
 	{
@@ -1510,7 +1436,6 @@ class VeritransPay extends PaymentModule
 		
 		Veritrans_Config::$isProduction = Configuration::get('VT_ENVIRONMENT') == 'production' ? true : false;
 		Veritrans_Config::$serverKey = Configuration::get('VT_SERVER_KEY');
-
 		$veritrans_notification = new Veritrans_Notification(); 
 		$history = new OrderHistory();
 		$history->id_order = (int)$veritrans_notification->order_id;
@@ -1535,7 +1460,6 @@ class VeritransPay extends PaymentModule
 		       		echo 'Valid challenge notification accepted.';
 		     	} 		       	
 		     } else if ($veritrans_notification->transaction_status == 'settlement'){
-
 		     	if($veritrans_notification->payment_type != 'credit_card')
 		     	{
 			     	$history->changeIdOrderState(Configuration::get('VT_PAYMENT_SUCCESS_STATUS_MAP'), $order_id_notif);
@@ -1545,7 +1469,6 @@ class VeritransPay extends PaymentModule
 		     	{
 		     		echo 'Credit card settlement notification accepted.';	
 		     	}
-
 		     }else if ($veritrans_notification->transaction_status == 'pending'){
 		     	$history->changeIdOrderState(Configuration::get('VT_PAYMENT_CHALLENGE_STATUS_MAP'), $order_id_notif);
 		       	echo 'Pending notification accepted.';
