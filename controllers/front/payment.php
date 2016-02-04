@@ -21,6 +21,8 @@ class VeritransPayPaymentModuleFrontController extends ModuleFrontController
     $cart = $this->context->cart;
     if (!$this->module->checkCurrency($cart))
       Tools::redirect('index.php?controller=order');
+
+    $cf = Configuration::get('VT_CONVENIENCE_FEE') * 0.01;
     
     $this->context->smarty->assign(array(
       'payment_type' => Configuration::get('VT_PAYMENT_TYPE'),
@@ -29,7 +31,7 @@ class VeritransPayPaymentModuleFrontController extends ModuleFrontController
       'nbProducts' => $cart->nbProducts(),
       'cust_currency' => $cart->id_currency,
       'currencies' => $this->module->getCurrency((int)$cart->id_currency),
-      'total' => $cart->getOrderTotal(true, Cart::BOTH),
+      'total' => $cart->getOrderTotal(true, Cart::ONLY_PRODUCTS_WITHOUT_SHIPPING) + ($cf*($cart->getOrderTotal(true, Cart::ONLY_PRODUCTS_WITHOUT_SHIPPING))) + $cart->getOrderTotal(true, Cart::ONLY_SHIPPING),
       'this_path' => $this->module->getPathUri(),
       'this_path_ssl' => Tools::getShopDomainSsl(true, true).__PS_BASE_URI__.'modules/'.$this->module->name.'/'
     ));
